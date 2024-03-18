@@ -1,0 +1,653 @@
+---
+title: "APP Checkin at UCLA"
+author: Tim Chen
+date: March 22, 2005
+output: beamer_presentation
+---
+Functions imported from simetas2022.r
+```{r}
+## General ETAS simulator where the user can input densities. 
+## Have all the parameters defined externally!!!! 
+
+simhawk = function(x1=1, y1=1, T=100, rho=unifrho, gt=powergt, gxy=powerxy, 
+    gmi=expprod, mdensity=expmag, sor=1, keep=1){ 
+    ##### THIS IS FOR SIMULATING A HAWKES PROCESS WITH 
+    ##### lambda(t,x,y) = mu rho(x,y) + 
+    ##### SUM gmi(m_i) gt(t-t_i) gxy(x-xi,y-yi; mi),
+    ##### on a space S = [0,x1] x [0,y1] (km), in time [0,T], 
+    ##### background temporal rate mu and spatial density rho(x,y),
+    ##### triggering density gt(t-t_i) gxy(x-xi, y-yi; mi),
+    ##### productivity gmi(m_i),
+    ##### and magnitude density mdensity(m).
+    ##### sor = 1 outputs the points in chronological order.
+    ##### keep = 1 means only keep the ones within the space time window.
+    ##### Both gt and gxy must be densities, so that if mu = 1/(x1y1),
+    ##### then the integral of lambda over the space time region = mu T + SUM gmi(m_i).
+    ##### Thus the ETAS parameter K is included in gmi.
+    ##### If no magnitudes are desired, just let gmi = K. 
+    ##### mu should be defined externally, along with other parameters used in the functions. 
+    y = bgpts(x1,y1,T,rho, mdensity) ## lay down the background points.
+    cat(y$n,"mainshocks.\n") 
+    calcbr = 0
+    calcbr = mean(gmi(mdensity(1000000))) ## calculate branching ratio. Stop if br > 1. 
+    cat("branching ratio is ", calcbr,"\n")
+    if(calcbr>1.0){
+    cat("error, branching ratio = ", calcbr, " > 1.")
+    return(0)
+    }
+    stop1 = 0
+    if(y$n < 0.5) stop1 = 2
+    cat("aftershocks by generation\n")
+    w = y
+    while(stop1 < 1){
+	z = aft(w,x1,y1,T,gt,gxy,gmi,mdensity) ## place aftershocks down around y.
+	cat(z$n," ")
+	if(z$n > 0.5){
+	    y = combine1(y,z)
+	    w = z
+	    if(min(z$t) > T) stop1 = 2
+	}
+	if(z$n < 0.5) stop1 = 2
+    }
+    if(keep==1) y = keep1(y,x1,y1,T) ## to keep just the pts in the window.
+    if(sor==1) y = sort1(y) ## to have the points sorted chronologically.
+    y
+}
+
+## br = INT gmi(m) mdensity(m) dm, from m = m0 to infinity.
+
+normgt = function(n){
+	## normal triggering in time with mean gmean and gsd defined externally! 
+	rnorm(n,mean=gmean,sd=gsd) 
+}
+
+bgpts = function(x1,y1,T,rho,mdensity){
+    ## define mu externally! 
+    z1 = list()
+    n = rpois(1,mu*T)
+    z1$n = n
+    xy = rho(n,x1,y1)
+    z1$lon = xy[,1]
+    z1$lat = xy[,2]
+    z1$t = sort(runif(n)*T)
+    z1$m = mdensity(n)
+    z1$ztimes = c()
+    z1
+}
+
+aft = function(y,x1,y1,T,gt,gxy,gmi,mdensity){
+    ## place aftershocks around y.
+    z1 = list()
+    z1$t = c()
+    z1$n = 0
+    z1$m = c()
+    z1$lat = c()
+    z1$lon = c()
+    z1$ztimes = c()
+    n2 = gmi(y$m) ## vector of number of aftershocks for each mainshock.
+    for(i in 1:length(n2)){
+	if(n2[i] > 0.5){
+	    b1 = gt(n2[i])
+	    z1$ztimes = c(z1$ztimes, b1)
+	    z1$t = c(z1$t, b1 + y$t[i])
+	    xy = gxy(n2[i], y$m[i])
+	    z1$lon = c(z1$lon, xy[,1] + y$lon[i])
+	    z1$lat = c(z1$lat, xy[,2] + y$lat[i])
+	    z1$m = c(z1$m, mdensity(n2[i]))
+	}
+    }
+    z1$n = sum(n2)
+    z1
+}
+
+combine1 = function(y,z){
+    z1 = list()
+    z1$t = c(y$t,z$t)
+    z1$n = y$n + z$n
+    z1$m = c(y$m,z$m)
+    z1$lat = c(y$lat,z$lat)
+    z1$lon = c(y$lon,z$lon)
+    z1$ztimes = c(y$ztimes, z$ztimes)
+    z1
+}
+
+keep1 = function(y,x1,y1,T){
+    ## keep only the pts of y that are within the space time window [0,x1] x [0,y1] x [0,T].
+    keeps = c(1:length(y$t))[(y$t<T)&(y$lon<x1)&(y$lat<y1)&(y$lon>0)&(y$lat>0)]
+    y$t = y$t[keeps]
+    y$m = y$m[keeps]
+    y$lon = y$lon[keeps]
+    y$lat = y$lat[keeps]
+    y$n = length(keeps)
+    y
+}
+
+sort1 = function(y){
+    ## sort the pts chronologically.
+    ord2 = order(y$t)
+    y$t = y$t[ord2]
+    y$m = y$m[ord2]
+    y$lon = y$lon[ord2]
+    y$lat = y$lat[ord2]
+    y
+}
+
+## rho takes an integer n and x1 and y1 and outputs a matrix of n locations of mainshocks.
+## gt takes an integer n and outputs a vector of n nonnegative times since mainshock.
+## gxy takes an integer n and magnitude m and outputs a matrix of n locs from mainshock.
+## gmi takes a vector of mags m and outputs a vector of number of aftershocks per mainshock.   
+## mdensity takes an integer n and lower mag threshold m0 and outputs a vector of n magnitudes.
+
+## Below are examples of functions rho, gt, gxy, gmi, and mdensity.
+
+unifrho = function(n,x1,y1){
+    ## Uniform spatial background density rho on [0,x1] x [0,y1].
+    x = runif(n,min=0,max=x1)
+    y = runif(n,min=0,max=y1)
+    cbind(x,y)
+}
+
+## density = b e ^ -bm. cdf = 1 - e^-bm. m means m - m0. 
+## u = unif(0,1). F(x) = u. 1 - e^-b(m-m0) = u. 
+## Solve for m. 
+## e^-b(m-m0) = 1-u. 
+## -b(m-m0) = log(1-u). 
+## m - m0 = log(1-u)/-b. 
+## m = -log(1-u)/b + m0. 
+
+expmag = function(n){  ## need theta_b and theta_m0 defined externally!  
+-log(1-runif(n))/theta_b + theta_m0
+}
+ 
+pointmag = function(n) rep(0,n) 
+
+## expmag = function(n,theta, m0=3.5){
+##    ## exponential magnitude density mdensity with minimum m0 and mean m0+b1.
+## THIS IS WRONG!!! rexp(n,rate=1/theta$b) + m0
+## } 
+ 
+expgt = function(n){ ## need theta_beta defined externally! 
+    ## exponential triggering function in time gt, with mean beta. 
+    ## f(u) = beta e^(-beta u).
+    rexp(n,rate=1/theta_beta)
+}
+
+powergt = function(n){
+    ## power law triggering function in time gt. Define theta_c and theta_p externally! 
+    ## f(u) = (p-1) c^(p-1) (u+c)^-p.
+    v = runif(n)
+    theta_c*(1-v)^(1/(1-theta_p)) - theta_c
+}
+
+## Notes for powergt.
+## if v = runif(1), then new time is found by letting v = F(t) and solving for t.
+## F(t) = INT from 0 to t of f(u) du = (p-1) c^(p-1) (u+c)^(1-p) / (1-p)
+## from u = 0 to t
+## = -c^(p-1) (t+c)^(1-p) + c^(p-1) c^(1-p) = 1 - c^(p-1) (t+c)^(1-p).
+## Setting v = 1 - c^(p-1) (t+c)^(1-p) and solving for t, we get
+## c^(p-1) (t+c)^(1-p) = 1-v.
+## (t+c)^(1-p) = (1-v) c^(1-p).
+## t+c = c (1-v)^{1/(1-p)}.
+## t = c (1-v)^{1/(1-p)} - c.
+
+powerxy = function(n,m){
+    ## define theta_d and theta_q externally! 
+    ## power law triggering in space according to ETAS (2.3), gxy, of
+    ## Ogata (1998). See http://wildfire.stat.ucla.edu/pdflibrary/ogata98.pdf . 
+    ## Here the density does not depend on magnitude of the mainshock. 
+    ## âˆ«f(x,y)dxdy = 1 = âˆ«h(r)rdrdÃ¸ = 2Ï€âˆ«h(r)rdr. 
+    ## h(r) = c (r^2 + d)^(-q). 
+    ## âˆ« h(r)rdr = c(r^2+d)^(1-q)/(2-2q),r=0toâˆž. For q > 1, this is 0+cd^(1-q)/(2q-2).
+    ## So c = (q-1)d^(q-1)/Ï€. 
+    v = runif(n)
+    dist1 = sqrt(theta_d*(1-v)^(1/(1-theta_q))-theta_d)
+    thet1 = runif(n)*2*pi
+    x = cos(thet1)*dist1
+    y = sin(thet1)*dist1
+    cbind(x,y)
+}
+
+pointxy = function(n,m) matrix(0,ncol=2,nrow=n) 
+
+expxy = function(n,m){
+    ## define theta_alpha externally! 
+    ## exponential triggering in space. f(r) = alpha/pi exp(-alpha r^2). 
+    ## Here the density does not depend on magnitude of the mainshock. 
+    ## To see that this is a density, 
+    ## âˆ«f(x,y)dxdy = âˆ«f(r)rdrdÃ¸ = 2Ï€âˆ«f(r)rdr 
+    ## = 2alpha âˆ« exp(-alpha r^2) r dr = -exp(-alpha r^2) ,r=0toâˆž, = 0+1, for alpha>0.  
+    v = rexp(n,rate=theta_alpha)
+    dist1 = sqrt(v)
+    thet1 = runif(n)*2*pi
+    x = cos(thet1)*dist1
+    y = sin(thet1)*dist1
+    cbind(x,y)
+}
+
+expprod = function(m){
+    ## define m0, theta_K, and theta_a externally! 
+    ## exponential productivity with parameters K and a for gmi.
+    rpois(length(m),theta_K*exp(theta_a*(m-theta_m0)))
+}
+
+## expect Kexp(am) = âˆ« Kexp(am) bexp(-bm)dm = âˆ« Kb exp(am-bm)dm = Kb/(b-a). 
+## This is the branching ratio. 
+#y = mdensity(1000)
+#z = gmi(y) 
+#mean(z) 
+
+pointprod = function(m) rpois(length(m),theta_K) ## Here each point has productivity theta_K. 
+## Define theta_K externally!  
+
+unifgt = function(n) sort(runif(n,max=unif_t_length)) 
+## Define unif_t_length externally! 
+
+unifxy = function(n,m){ 
+## define unif_xy_rad externally! 
+## generate 3n candidate points on the unit square, keep the ones in the unit circle, and rescale. 
+numcand = max(100,3*n)
+candx = runif(numcand)*2-1
+candy = runif(numcand)*2-1 
+keep = (candx^2 + candy^2 < 1)
+if(sum(keep)<n) cat("\n\n\n Error! \n\n\n") 
+x2 = candx[keep>0] 
+y2 = candy[keep>0]
+x = (x2[1:n])*unif_xy_rad
+y = (y2[1:n])*unif_xy_rad 
+cbind(x,y)
+}
+
+supthin = function(z,lambda,f,b=mean(lambda)){
+## z = data, lambda = conditional intensity at pts, f = function to compute lambda, 
+## and b = resulting rate.
+## First thin, then superpose
+keepz = list()
+for(i in 1:z$n){
+if(runif(1) < b/lambda[i]){
+keepz$t = c(keepz$t,z$t[i])
+keepz$lon = c(keepz$lon,z$lon[i])
+keepz$lat = c(keepz$lat,z$lat[i])
+}
+}
+candn = rpois(1,b*X1*Y1*T)
+candt = sort(runif(candn)*T)
+candx = runif(candn)*X1
+candy = runif(candn)*Y1
+for(i in 1:candn){
+v = f(candt[i],candx[i],candy[i],z)
+if(v < b){
+if(runif(1) < (b-v)/b){
+keepz$t = c(keepz$t,candt[i])
+keepz$lon = c(keepz$lon,candx[i])
+keepz$lat = c(keepz$lat,candy[i])
+}}
+}
+keepz$lon = keepz$lon[order(keepz$t)]
+keepz$lat = keepz$lat[order(keepz$t)]
+keepz$t = sort(keepz$t)
+keepz$n = length(keepz$t)
+keepz
+}
+``` 
+
+```{r, message=F}
+library(tidyverse)
+df = read_csv("ucla_checkins.csv",col_names = c("ID","Date","Lat","Lon","Location Name"))
+x = df$Lon
+y = df$Lat
+x1 = (x+ 118.446)/(-118.4396 + 118.446)  
+y1 = (y-34.06721) / (34.07577-34.06721) 
+Date = unclass(df$Date)
+t1 = (Date-min(Date))/(max(Date)-min(Date))
+tempdf = df %>% group_by(Lat, Lon) %>% count()
+newdf = df %>% merge(tempdf, by = c("Lat","Lon")) %>% arrange(Date)
+newdf$y1 = y1
+newdf$x1 = x1
+newdf$t1 = t1
+newtempdf = newdf %>% group_by(x1,y1) %>% count()
+newtempdf
+n = dim(df)[0]
+plot(c(0,1),c(0,1),type="n",xlab="x-coordinate",ylab="y-coordinate",main="UCLA checkin")
+points(x1,y1,pch=3)
+```
+```{r}
+newtempdf
+```
+
+ Kernel smoothing 
+```{r}
+library(spatstat)
+library(splancs)
+library(spatial)
+###  Kernel smoothing 
+x1 = newtempdf$x1
+y1 = newtempdf$y1
+
+stddist = sqrt(1/n*(sum((x1-mean(x1))^2)+sum((y1-mean(y1))^2))) ## standard distance 
+ds = sqrt((x1-mean(x1))^2+(y1-mean(y1))^2) ## distances to mean 
+dm = median(ds) 
+bdw = .9*min(stddist,sqrt(1/log(2))*dm)*n^-.2 
+bdw = sqrt(bw.nrd(x1)^2+bw.nrd(y1)^2) 
+b1 = as.points(x1,y1)
+bdry = matrix(c(0,0,1,0,1,1,0,1,0,0),ncol=2,byrow=T)
+z = kernel2d(b1,bdry,bdw)
+par(mfrow=c(1,2))
+image(z,col=gray((64:20)/64),xlab="x",ylab="y")
+points(b1)
+x4 = (0:100)/100*(max(z$z)-min(z$z))+min(z$z)
+plot(c(0,10),c(.8*min(x4),1.2*max(x4)),type="n",axes=F,xlab="",ylab="")
+image(c(-1:1),x4,matrix(rep(x4,2),ncol=101,byrow=T),add=T,col=gray((64:20)/64))
+text(2,min(x4),as.character(signif(min(x4),2)),cex=1)
+text(2,(max(x4)+min(x4))/2,as.character(signif((max(x4)+min(x4))/2,2)),cex=1)
+text(2,max(x4),as.character(signif(max(x4),2)),cex=1)
+mtext(s=3,l=-2,at=1,"Rate (pts per unit area)")
+## repeat the above, trying other values of bdw, for more or less 
+## smoothing.
+```
+
+K,L
+```{r,message= F}
+######### K-function & L-function:
+
+par(mfrow=c(1,2)) ## if you want to make a 2x1 grid of plots
+s = seq(.001,.3,length=50)
+k4 = khat(b1,bdry,s)
+plot(s,k4,xlab="distance",ylab="K4(h)",pch="*")
+lines(s,k4)
+lines(s,pi*s^2,lty=2)
+
+L4 = sqrt(k4/pi)-s
+plot(c(0,.3),range(L4),type="n",xlab="lag, h",ylab="L4(h) - h")
+points(s,L4,pch="*")
+lines(s,L4)
+lines(s,rep(0,50),lty=2)
+
+### CONFIDENCE BOUNDS FOR K-FUNCTION via simulation 
+k4conf = Kenv.csr(npts(b1), bdry, 1000, s) 
+plot(c(0,max(s)),c(0,max(k4conf$upper,k4)), type="n",xlab="distance",ylab="K4(h)")
+points(s,k4,pch="*") 
+lines(s,k4) 
+lines(s,pi*s^2,lty=2)
+lines(s,k4conf$upper,lty=3,col="green",lwd=2) 
+lines(s,k4conf$lower,lty=3,col="green",lwd=2) 
+L4upper = sqrt(k4conf$upper/pi) - s  
+L4lower = sqrt(k4conf$lower/pi) - s 
+
+plot(c(0,max(s)),c(min(L4lower,L4),max(L4upper,L4)), 
+type="n",xlab="distance",ylab="L4(h) - h") 
+points(s,L4,pch="*") 
+lines(s,L4) 
+lines(s,L4upper,lty=2,col="green",lwd=2) 
+lines(s,L4lower,lty=2,col="green",lwd=2) 
+lines(s,rep(0,length(s)))
+
+```
+
+
+```{r}
+######################################### Superthinning . 
+## First simulate a Hawkes process. 
+## Then calculate lambda at all the points. 
+## Then superthin. 
+## lambda(t,x,y) = mu rho(x,y) + K SUM gt(t-t_i)gxy(x-xi,y-yi),  
+    ##### with rho(x,y) = 1/(X1Y1), 
+    ##### gt(t) = beta e^(-beta t),
+    ##### g(x,y) = alpha/pi exp(-alpha r^2), with x^2+y^2=r^2.  
+
+## First load in simetas2022.r. 
+z = list()
+z$lat = newdf$y1
+z$lon = newdf$x1
+z$t = newdf$t1
+z$m = newdf$n
+z$n = dim(newdf)[1]
+
+
+T = 10^3
+X1 = 1
+Y1 = 1
+M0 = 3.5
+## First, read in simetasmay2017.r 
+theta0 = list(mu=.08,K=.9,alpha=5,beta=3.5,b=1) 
+mu = theta0$mu; K = theta0$K; alpha = theta0$alpha; beta=theta0$beta
+
+lambda = rep(0, z$n)
+const = K*alpha/pi*beta
+for(j in 2:(z$n)){
+   gij = 0
+   for(i in 1:(j-1)){
+    r2 = (z$lon[j]-z$lon[i])^2+(z$lat[j]-z$lat[i])^2
+    gij = gij + exp(-beta*(z$t[j]-z$t[i])-alpha*r2)
+    }
+   lambda[j] = mu / X1/Y1  + const*gij
+}
+f = function(t,x,y,z){
+## compute lambda(t,x,y) given data, z. 
+const = K*alpha/pi*beta
+gij = 0
+j = 0
+if(t > z$t[1]) j = max(c(1:z$n)[z$t<t])
+if(j>0) for(i in 1:j){
+    r2 = (x-z$lon[i])^2+(y-z$lat[i])^2
+    gij = gij + exp(-beta*(t-z$t[i])-alpha*r2)
+}
+mu / X1 / Y1 + const*gij
+}
+
+s = supthin(z,lambda,f,b=.2)
+par(mfrow=c(1,2))
+plot(z$lon,z$lat,pch=3,cex=.5,xlab="lon",ylab="lat",main="original pts.")
+plot(s$lon,s$lat,pch=3,cex=.5,xlab="lon",ylab="lat",main="superthinned points")
+
+par(mfrow=c(1,1))
+plot(z$lon,z$lat,pch=3,cex=.5,xlab="lon",ylab="lat",col="blue") ## original pts.
+points(s$lon,s$lat,pch=1,cex=.5) ## superthinned pts.
+lambda
+```
+
+```{r}
+
+```
+
+```{r}
+#Before Assuming Simple
+library(spatstat)
+X = ppp(z$lon, z$lat, c(0,1), c(0,1), marks=z$n)
+par(mfrow=c(1,2)) 
+X = ppp(z$lon, z$lat, c(0,1), c(0,1))
+fit = ppm(X, ~ polynom(x, y, 1), Poisson())
+summary(fit)
+plot(predict(fit),main="Poisson with \n degree 1 polynomial",pause=FALSE,se=FALSE)
+points(z$lon,z$lat,cex=.2)
+
+
+fit = ppm(X, ~ sqrt(x^2 + y^2), Poisson())
+plot(predict(fit),main="Poisson with x^2 and y^2",pause=FALSE,se=FALSE)
+points(z$lon,z$lat,cex=.2)
+#2nd order
+par(mfrow=c(1,2)) 
+fit = ppm(X, ~ polynom(x, y, 2), Poisson())
+plot(predict(fit),main="Predict",pause=FALSE)
+points(z$lon,z$lat,cex=.2)
+
+data(cells)
+m <- ppm(cells,~polynom(x,y,2),Poisson(),rbord=0.05)
+trend <- predict(m,type="trend",ngrid=100)
+cif <- predict(m,type="cif",ngrid=100)
+persp(trend,theta=-30,phi=40,d=4,ticktype="detailed",zlab="z")
+persp(cif,theta=-30,phi=40,d=4,ticktype="detailed",zlab="z")
+
+## You can also fit models with covariates in ppm. 
+## See SpatStatIntro.pdf. 
+```
+
+
+```{r}
+#assume simple, fit
+X = ppp(newtempdf$x1, newtempdf$y1, c(0,1), c(0,1))
+fit = ppm(X, ~ polynom(x, y, 1), Poisson())
+fit2 = ppm(X, ~ polynom(x, y, 2), Poisson())
+
+summary(fit)
+summary(fit2)
+par(mfrow=c(1,2))
+plot(predict(fit),main="Poisson with \n degree 1 polynomial",pause=FALSE,se=F)
+points(newtempdf$x1,newtempdf$y1,cex=.2)
+
+plot(predict(fit2),main="Poisson with \n degree 2 polynomial",pause=FALSE,se=F)
+points(newtempdf$x1,newtempdf$y1,cex=.2)
+```
+
+```{r}
+supthin = function(z,lambda,f,b=mean(lambda)){
+## z = data, lambda = conditional intensity at pts, f = function to compute lambda, 
+## and b = resulting rate.
+## First thin, then superpose
+keepz = list()
+for(i in 1:z$n){
+if(runif(1) < b/lambda[i]){
+keepz$t = c(keepz$t,z$t[i])
+keepz$lon = c(keepz$lon,z$lon[i])
+keepz$lat = c(keepz$lat,z$lat[i])
+}
+}
+candn = rpois(1,b*X1*Y1*T)
+candt = sort(runif(candn)*T)
+candx = runif(candn)*X1
+candy = runif(candn)*Y1
+for(i in 1:candn){
+v = f(candt[i],candx[i],candy[i],z)
+if(v < b){
+if(runif(1) < (b-v)/b){
+keepz$t = c(keepz$t,candt[i])
+keepz$lon = c(keepz$lon,candx[i])
+keepz$lat = c(keepz$lat,candy[i])
+}}
+}
+keepz$lon = keepz$lon[order(keepz$t)]
+keepz$lat = keepz$lat[order(keepz$t)]
+keepz$t = sort(keepz$t)
+keepz$n = length(keepz$t)
+keepz
+}
+f = function(t,x,y,z){
+## compute lambda(t,x,y) given data, z. 
+const = K*alpha/pi*beta
+gij = 0
+j = 0
+if(t > z$t[1]) j = max(c(1:z$n)[z$t<t])
+if(j>0) for(i in 1:j){
+    r2 = (x-z$lon[i])^2+(y-z$lat[i])^2
+    gij = gij + exp(-beta*(t-z$t[i])-alpha*r2)
+}
+lambda = rep(0,z$n)
+const = K*alpha/pi*beta
+for(j in 2:(z$n)){
+   gij = 0
+   for(i in 1:(j-1)){
+    r2 = (z$lon[j]-z$lon[i])^2+(z$lat[j]-z$lat[i])^2
+    gij = gij + exp(-beta*(z$t[j]-z$t[i])-alpha*r2)
+    }
+   lambda[j] = mu / X1 / Y1 + const*gij
+}
+s = supthin(z,lambda,f,b=.2)
+par(mfrow=c(1,2))
+plot(z$lon,z$lat,pch=3,cex=.5,xlab="lon",ylab="lat",main="original pts.")
+plot(s$lon,s$lat,pch=3,cex=.5,xlab="lon",ylab="lat",main="superthinned points")
+```
+```{r}
+z
+```
+
+
+
+```{r}
+    ##### This is for fitting a Hawkes model with no magnitudes. 
+    ##### lambda(t,x,y) = mu rho(x,y) + K SUM gt(t-t_i)gxy(x-xi,y-yi),  
+    ##### with rho(x,y) = 1/(X1Y1), 
+    ##### gt(t) = beta e^(-beta t),
+    ##### g(x,y) = alpha/pi exp(-alpha r^2), with x^2+y^2=r^2,  
+    ##### The space S = [0,X1] x [0,Y1] (km), in time [0,T]. 
+    ##### I am fitting by minimizing the sum of squared differences
+    ##### between bin areas and the sum of 1/lambdai. 
+    ##### The parameter vector theta = (mu, K, alpha, beta)
+
+
+## Construct a list, wbin, where wbin[[17]] = c() if bin 17 is empty, and 
+## if wbin[[17]] = c(1,2,10), then points 1,2,and 10 are in bin 17. 
+## I will have 10 x 10 x 10 = 1000 bins. 
+wbin = list()
+for(i in 1:1000) wbin[[i]] = c(0)
+for(m in 1:z$n) {
+    gridindex = 10*10*floor(z$t[m]*10/T)+
+    10*floor(z$lon[m]*10/X1)+ceiling(z$lat[m]*10/Y1)
+    wbin[[gridindex]] = c(wbin[[gridindex]],m)
+}
+for(i in 1:1000) wbin[[i]] = wbin[[i]][-1]
+
+#plot(z$lon,z$lat)
+#for(i in 1:1000) {
+#    if(length(wbin[[i]])>0) points(z$lon[wbin[[i]]],z$lat[wbin[[i]]],col="red",pch=3)
+#}
+
+## the area of each bin is T*X1*Y1/10/10/10
+
+sumsqstoyan = function(theta,draw=0){
+mu = theta[1]; K = theta[2]; alpha = theta[3]; beta = theta[4] 
+cat("\n mu = ",m3(mu),", K = ",m3(K),", alpha = ",m3(alpha),
+    ", beta = ",m3(beta),".\n") 
+if(min(mu,K,alpha,beta)<0.000000001) return(99999) 
+if(K>.99999) return(99999)
+if(draw){
+r = seq(0,3,length=100)
+t = alpha/pi * exp(-alpha * r^2)
+lines(r,t,col="orange",lty=2) 
+}
+const = K*alpha/pi*beta
+b = T*X1*Y1/10/10/10
+mysum = rep(b,1000)
+for(i in 1:1000){ ## i is the bin index. 
+    if(length(wbin[[i]]) > .5){
+       mysum[i] = 0
+       for(j in wbin[[i]]){ ## j is the index of a point in bin i. 
+           gkj = 0
+           if(j>1) for(k in 1:(j-1)){ ## k are indices of previous points. 
+              r2 = (z$lon[j]-z$lon[k])^2+(z$lat[j]-z$lat[k])^2
+              gkj = gkj + exp(-beta*(z$t[j]-z$t[k])-alpha*r2)
+           }
+       lambdaj = mu/X1/Y1 + const*gkj
+       if(lambdaj < 0){
+	   cat("lambda ",j," is less than 0.")
+	   return(99999)
+       }
+       mysum[i] = mysum[i] + 1/lambdaj
+       }
+    }
+}
+if(draw) lines(r,t,col="white",lty=2) 
+sum((mysum-b)^2)
+}
+
+sumsqstoyan(c(2,.3,2,2,1))
+
+theta1 = c(.08,.75,2.5,3.5)/2
+b1 = optim(theta1,sumsqstoyan,control=list(maxit=20))
+b2 = optim(b1$par,sumsqstoyan,hessian=T,control=list(maxit=20))
+theta2 = b2$par
+sqrt(diag(solve(b2$hess))) ## for SEs 
+
+## compare the fit. 
+par(mfrow=c(1,1))
+r = seq(0,1,length=100)
+s = theta0$beta * exp(-theta0$beta * r)
+plot(r,s,col="green",xlab="t",ylab="g(t)",type="l")
+t = theta2[4]*exp(-theta2[4]*r)
+lines(r,t,col="blue") 
+legend("topright",lty=c(1,1),c("real","estimated"),col=c("green","blue"))
+
+
+```
+
+
+
+
